@@ -14,6 +14,19 @@ from __future__ import annotations
 import time
 from typing import Any
 
+# --- FIX: Compatibility patch for PNSEA and curl_cffi ---
+try:
+    import curl_cffi.requests
+    if not hasattr(curl_cffi.requests, "RequestException"):
+        try:
+            from curl_cffi.requests.errors import RequestsError
+            curl_cffi.requests.RequestException = RequestsError
+        except Exception:
+            curl_cffi.requests.RequestException = Exception
+except Exception:
+    pass
+# ---------------------------------------------------------
+
 try:
     from pnsea import NSE
 except ImportError as exc:
