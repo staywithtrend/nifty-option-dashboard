@@ -19,6 +19,7 @@ or at 9:15 AM and keep it running.
 
 import time
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -146,7 +147,7 @@ if df.empty or "strike" not in df.columns:
     )
     st.stop()
 
-now = datetime.now()
+now = datetime.now(ZoneInfo("Asia/Kolkata"))
 
 # ---------------------------------------------------------------------
 # Intraday history
