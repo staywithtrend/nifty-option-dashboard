@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from nse_fetcher import NseSession
 from signals import (
@@ -264,6 +265,61 @@ with placeholder.container():
         "This is a read of current options positioning, not a prediction "
         "or trade recommendation — pair it with your own technical view."
     )
+
+    # -------------------------------------------------------------
+    # TradingView NIFTY Futures chart
+    # -------------------------------------------------------------
+    st.markdown("## NIFTY Futures — TradingView")
+
+    st.caption(
+        "TradingView continuous front-month futures (NSE:NIFTY1!). "
+        "Use the chart toolbar to change timeframe, add indicators, "
+        "drawings, or open the full TradingView chart."
+    )
+
+    tradingview_html = """
+    <div class="tradingview-widget-container" style="height:680px;width:100%">
+      <div class="tradingview-widget-container__widget"
+           style="height:calc(100% - 32px);width:100%"></div>
+      <div class="tradingview-widget-copyright"
+           style="font-size:12px;text-align:center;padding:4px 0">
+        <a href="https://www.tradingview.com/symbols/NSE-NIFTY1%21/"
+           rel="noopener nofollow" target="_blank">
+          NIFTY Futures chart by TradingView
+        </a>
+      </div>
+      <script type="text/javascript"
+              src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"
+              async>
+      {
+        "autosize": true,
+        "symbol": "NSE:NIFTY1!",
+        "interval": "5",
+        "timezone": "Asia/Kolkata",
+        "theme": "light",
+        "style": "1",
+        "locale": "en",
+        "withdateranges": true,
+        "hide_side_toolbar": false,
+        "hide_top_toolbar": false,
+        "hide_legend": false,
+        "hide_volume": false,
+        "allow_symbol_change": true,
+        "save_image": true,
+        "calendar": false,
+        "details": false,
+        "hotlist": false,
+        "studies": [],
+        "show_popup_button": true,
+        "popup_width": "1000",
+        "popup_height": "650",
+        "support_host": "https://www.tradingview.com"
+      }
+      </script>
+    </div>
+    """
+
+    components.html(tradingview_html, height=700, scrolling=False)
 
     # -------------------------------------------------------------
     # Intraday charts
