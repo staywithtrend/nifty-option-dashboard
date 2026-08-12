@@ -299,45 +299,13 @@ with placeholder.container():
             height=320,
         )
 
-        st.markdown("**NIFTY / Index price — intraday**")
-
-        price_chart = chart_data[["spot"]].rename(
-            columns={"spot": f"{symbol} Price"}
-        )
-
-        st.line_chart(
-            price_chart,
-            use_container_width=True,
-            height=280,
-        )
-
         latest = chart_data.iloc[-1]
 
-        m1, m2, m3, m4 = st.columns(4)
+        # Keep the ATM summary row requested by the user.
+        m1, m2, m3 = st.columns(3)
         m1.metric("Current ATM", f"{latest['atm_strike']:,.0f}")
         m2.metric("ATM Call OI", f"{latest['atm_ce_oi']:,.0f}")
         m3.metric("ATM Put OI", f"{latest['atm_pe_oi']:,.0f}")
-        m4.metric("Snapshots", f"{len(chart_data)}")
-
-        # Compact intraday observation table.
-        intraday_view = chart_data[
-            ["time", "spot", "atm_strike", "atm_ce_oi", "atm_pe_oi"]
-        ].copy()
-
-        intraday_view.columns = [
-            "Time",
-            "Spot",
-            "ATM Strike",
-            "ATM Call OI",
-            "ATM Put OI",
-        ]
-
-        st.dataframe(
-            intraday_view.tail(30).iloc[::-1],
-            hide_index=True,
-            use_container_width=True,
-            height=260,
-        )
 
     else:
         st.info(
@@ -590,13 +558,13 @@ with placeholder.container():
             (oi_bars + oi_labels)
             .properties(
                 height=390,
-                title=f"Call OI vs Put OI  |  ATM {spot:,.0f}",
+                title=f"ATM CE OI vs PE OI  |  ATM {spot:,.0f}",
             )
         )
     else:
         oi_chart = (oi_bars + oi_labels).properties(
             height=390,
-            title="Call OI vs Put OI",
+            title="ATM CE OI vs PE OI",
         )
 
     st.altair_chart(oi_chart, use_container_width=True)
@@ -682,7 +650,7 @@ with placeholder.container():
         change_bars + change_labels
     ).properties(
         height=390,
-        title="Call OI Change vs Put OI Change",
+        title="ATM CE OI Change vs PE OI Change",
     )
 
     st.altair_chart(change_chart, use_container_width=True)
