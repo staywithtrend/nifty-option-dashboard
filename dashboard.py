@@ -6,15 +6,10 @@ Features:
 - Expiry selector
 - PCR / Max Pain / IV skew / expected move / ATM straddle
 - Top CE/PE OI walls
-- Option chain around ATM
+- Option chain around ATM (includes Day OI Change, Window OI Delta, 2-decimal IVs)
 - Intraday ATM CE OI vs PE OI graph
 - Intraday NIFTY spot graph
 - Intraday history collected from the first refresh of the day until close
-
-Important:
-The intraday charts are built from snapshots collected while this dashboard
-is running. For a complete 9:15 AM–3:30 PM session, start the dashboard before
-or at 9:15 AM and keep it running.
 """
 
 import time
@@ -23,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+import altair as alt
 
 from nse_fetcher import NseSession
 from signals import (
@@ -87,7 +83,7 @@ st.sidebar.caption(
 
 
 # ---------------------------------------------------------------------
-# Fetch one raw chain first so the sidebar can offer all expiries
+# Fetch raw chain for expiries discovery
 # ---------------------------------------------------------------------
 placeholder = st.empty()
 
@@ -115,16 +111,10 @@ selected_expiry = st.sidebar.selectbox(
     key="selected_expiry",
 )
 
-# A new expiry means a different historical OI series.
 history_key = (symbol, selected_expiry)
 
 # ---------------------------------------------------------------------
 # Build current snapshot for the SELECTED expiry.
-#
-# The first request above is used to discover the available expiries.
-# We then make a second request explicitly filtered to the user's choice.
-# This is necessary because NSE/PNSEA can return the nearest-expiry chain
-# while still reporting all available expiry dates.
 # ---------------------------------------------------------------------
 if selected_expiry == available_expiries[0]:
     selected_raw = raw
@@ -150,14 +140,7 @@ if df.empty or "strike" not in df.columns:
 now = datetime.now(ZoneInfo("Asia/Kolkata"))
 
 # ---------------------------------------------------------------------
-# Intraday history
-#
-# Each refresh stores:
-# timestamp, NIFTY/index spot, ATM strike, ATM CE OI, ATM PE OI
-#
-# ATM is recalculated on every snapshot. This means the chart represents
-# the option that was ATM at each observation. The table also shows the
-# ATM strike so strike changes are visible.
+# Intraday history tracking
 # ---------------------------------------------------------------------
 hist = st.session_state.history.setdefault(history_key, [])
 
@@ -173,11 +156,9 @@ snapshot = {
     "atm_pe_oi": float(atm_row["pe_oi"]),
 }
 
-# Avoid duplicate snapshots if Streamlit reruns unusually quickly.
 if not hist or hist[-1]["timestamp"].strftime("%H:%M:%S") != now.strftime("%H:%M:%S"):
     hist.append(snapshot)
 
-# Keep only today's market session data.
 st.session_state.history[history_key] = [
     x for x in hist
     if x["timestamp"].date() == now.date()
@@ -186,17 +167,8 @@ st.session_state.history[history_key] = [
 hist = st.session_state.history[history_key]
 
 # ---------------------------------------------------------------------
-# OI comparison snapshot
+# OI comparison snapshot history
 # ---------------------------------------------------------------------
-df_prev = None
-for item in hist:
-    age_seconds = (now - item["timestamp"]).total_seconds()
-    if age_seconds >= oi_lookback_mins * 60:
-        # For the detailed strike-by-strike OI comparison we use the
-        # DataFrame snapshots stored separately below.
-        pass
-
-# Maintain a separate DataFrame history in session state.
 if "df_history" not in st.session_state:
     st.session_state.df_history = {}
 
@@ -216,6 +188,7 @@ st.session_state.df_history[df_hist_key] = [
 
 df_snapshots = st.session_state.df_history[df_hist_key]
 
+df_prev = None
 for t, d in df_snapshots:
     if (now - t).total_seconds() >= oi_lookback_mins * 60:
         df_prev = d
@@ -223,7 +196,7 @@ for t, d in df_snapshots:
 merged = oi_change_vs_previous(df, df_prev)
 
 # ---------------------------------------------------------------------
-# Current calculations
+# Current positioning calculations
 # ---------------------------------------------------------------------
 pcr = compute_pcr(df)
 max_pain = compute_max_pain(df)
@@ -234,7 +207,7 @@ verdict, notes = bias_verdict(pcr, iv_skew, max_pain, spot)
 
 
 # ---------------------------------------------------------------------
-# Dashboard
+# Main Dashboard UI
 # ---------------------------------------------------------------------
 with placeholder.container():
 
@@ -268,7 +241,7 @@ with placeholder.container():
     # -------------------------------------------------------------
     # Intraday charts
     # -------------------------------------------------------------
-    st.markdown("## Intraday OI & NIFTY Price")
+    st.markdown("## Intraday OI & Price")
 
     chart_data = pd.DataFrame(hist)
 
@@ -301,7 +274,6 @@ with placeholder.container():
 
         latest = chart_data.iloc[-1]
 
-        # Keep the ATM summary row requested by the user.
         m1, m2, m3 = st.columns(3)
         m1.metric("Current ATM", f"{latest['atm_strike']:,.0f}")
         m2.metric("ATM Call OI", f"{latest['atm_ce_oi']:,.0f}")
@@ -319,7 +291,6 @@ with placeholder.container():
     # -------------------------------------------------------------
     st.markdown("## OI Walls (support/resistance by open interest)")
 
-    # Top 3 Call OI walls
     call_walls = (
         df.nlargest(3, "ce_oi")
         [["strike", "ce_oi", "ce_oi_change"]]
@@ -327,7 +298,6 @@ with placeholder.container():
     )
     call_walls.columns = ["Strike", "Call OI", "Call OI Change"]
 
-    # Top 3 Put OI walls
     put_walls = (
         df.nlargest(3, "pe_oi")
         [["strike", "pe_oi", "pe_oi_change"]]
@@ -335,7 +305,6 @@ with placeholder.container():
     )
     put_walls.columns = ["Strike", "Put OI", "Put OI Change"]
 
-    # Explicit TOTAL rows — totals of the displayed Top-3 walls.
     call_total = pd.DataFrame([{
         "Strike": "TOTAL",
         "Call OI": call_walls["Call OI"].sum(),
@@ -355,7 +324,6 @@ with placeholder.container():
         [put_walls, put_total], ignore_index=True
     )
 
-    # Full-chain totals are kept separately for context.
     full_call_oi = df["ce_oi"].sum()
     full_call_oi_change = df["ce_oi_change"].sum()
     full_put_oi = df["pe_oi"].sum()
@@ -416,17 +384,19 @@ with placeholder.container():
         cols_to_show = [
             "strike",
             "ce_oi",
+            "ce_oi_change",
             "ce_oi_delta",
             "ce_iv",
             "ce_ltp",
             "pe_ltp",
             "pe_iv",
             "pe_oi_delta",
+            "pe_oi_change",
             "pe_oi",
         ]
         st.caption(
-            f"OI delta columns compare against the snapshot from "
-            f"~{oi_lookback_mins} min ago."
+            f"OI delta columns compare against snapshot from ~{oi_lookback_mins} min ago. "
+            f"OI change columns show full-day open interest change."
         )
     else:
         cols_to_show = [
@@ -441,12 +411,14 @@ with placeholder.container():
             "pe_oi",
         ]
         st.caption(
-            "OI-change columns need a second snapshot at the selected "
-            "lookback interval."
+            "OI delta columns will appear after the initial lookback window passes."
         )
 
+    # Filter columns that exist in DataFrame
+    cols_to_show = [c for c in cols_to_show if c in display_df.columns]
     chain_display = display_df[cols_to_show].copy()
 
+    # Precision and sign formatting
     chain_format = {}
     if "strike" in chain_display.columns:
         chain_format["strike"] = "{:,.0f}"
@@ -454,6 +426,8 @@ with placeholder.container():
         chain_format["ce_oi"] = "{:,.0f}"
     if "ce_oi_change" in chain_display.columns:
         chain_format["ce_oi_change"] = "{:+,.0f}"
+    if "ce_oi_delta" in chain_display.columns:
+        chain_format["ce_oi_delta"] = "{:+,.0f}"
     if "ce_iv" in chain_display.columns:
         chain_format["ce_iv"] = "{:.2f}"
     if "ce_ltp" in chain_display.columns:
@@ -462,6 +436,8 @@ with placeholder.container():
         chain_format["pe_ltp"] = "{:.2f}"
     if "pe_iv" in chain_display.columns:
         chain_format["pe_iv"] = "{:.2f}"
+    if "pe_oi_delta" in chain_display.columns:
+        chain_format["pe_oi_delta"] = "{:+,.0f}"
     if "pe_oi_change" in chain_display.columns:
         chain_format["pe_oi_change"] = "{:+,.0f}"
     if "pe_oi" in chain_display.columns:
@@ -477,18 +453,15 @@ with placeholder.container():
         height=450,
     )
 
+    # -------------------------------------------------------------
+    # Altair OI Visualizations
+    # -------------------------------------------------------------
     st.markdown("## OI by Strike")
-
-    # Interactive grouped-bar charts, similar to the reference layout:
-    # CE and PE are side-by-side for every strike, with value labels.
-    import altair as alt
 
     chart_slice = df.iloc[lo:hi].copy()
     chart_slice["Strike"] = chart_slice["strike"].astype(float)
 
-    # -------------------------------------------------------------
-    # Chart 1 — OI by Strike
-    # -------------------------------------------------------------
+    # Chart 1 — Total OI by Strike
     oi_long = chart_slice[
         ["Strike", "ce_oi", "pe_oi"]
     ].melt(
@@ -552,13 +525,12 @@ with placeholder.container():
         )
     )
 
-    # Use a separate ATM marker only when spot lies inside the displayed range.
     if float(chart_slice["Strike"].min()) <= float(spot) <= float(chart_slice["Strike"].max()):
         oi_chart = (
             (oi_bars + oi_labels)
             .properties(
                 height=390,
-                title=f"ATM CE OI vs PE OI  |  ATM {spot:,.0f}",
+                title=f"ATM CE OI vs PE OI  |  Spot {spot:,.0f}",
             )
         )
     else:
@@ -569,9 +541,7 @@ with placeholder.container():
 
     st.altair_chart(oi_chart, use_container_width=True)
 
-    # -------------------------------------------------------------
-    # Chart 2 — OI Change by Strike
-    # -------------------------------------------------------------
+    # Chart 2 — Day's Change in OI
     change_long = chart_slice[
         ["Strike", "ce_oi_change", "pe_oi_change"]
     ].melt(
@@ -663,7 +633,7 @@ with placeholder.container():
 
 
 # ---------------------------------------------------------------------
-# Auto refresh
+# Auto refresh loop
 # ---------------------------------------------------------------------
 time.sleep(refresh_secs)
 st.rerun()
