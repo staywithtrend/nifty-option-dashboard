@@ -6,7 +6,7 @@ Features:
 - Expiry selector
 - PCR / Max Pain / IV skew / expected move / ATM straddle
 - Top CE/PE OI walls
-- Option chain around ATM (includes Day OI Change, Window OI Delta, 2-decimal IVs)
+- Option chain around ATM (includes Day OI Change, Window OI Delta, 2-decimal IVs, and Top-3 Heatmap Color Coding)
 - Intraday ATM CE OI vs PE OI graph
 - Intraday NIFTY spot graph
 - Intraday history collected from the first refresh of the day until close
@@ -58,6 +58,46 @@ def reset_history_for_new_day():
 
 
 reset_history_for_new_day()
+
+
+# ---------------------------------------------------------------------
+# Styling Function for Top 3 Highest Values in Chain
+# ---------------------------------------------------------------------
+def highlight_top3_chain(data):
+    """
+    Highlights the top 3 highest values in CE/PE OI and OI Change columns.
+    Top 1 = Darkest, Top 2 = Medium, Top 3 = Lightest.
+    """
+    styles = pd.DataFrame("", index=data.index, columns=data.columns)
+
+    # CE Shades (Blue Palette: Dark -> Medium -> Light)
+    ce_shades = [
+        "background-color: #1565C0; color: white; font-weight: bold;",  # Top 1
+        "background-color: #42A5F5; color: black;",                    # Top 2
+        "background-color: #90CAF9; color: black;"                     # Top 3
+    ]
+
+    # PE Shades (Pink/Red Palette: Dark -> Medium -> Light)
+    pe_shades = [
+        "background-color: #C2185B; color: white; font-weight: bold;",  # Top 1
+        "background-color: #EC407A; color: black;",                    # Top 2
+        "background-color: #F48FB1; color: black;"                     # Top 3
+    ]
+
+    for col in data.columns:
+        if col in ["ce_oi", "ce_oi_change", "ce_oi_delta"]:
+            shades = ce_shades
+        elif col in ["pe_oi", "pe_oi_change", "pe_oi_delta"]:
+            shades = pe_shades
+        else:
+            continue
+
+        # Get indices of the 3 highest numeric values
+        top_indices = data[col].dropna().nlargest(3).index
+        for rank, idx in enumerate(top_indices):
+            styles.loc[idx, col] = shades[rank]
+
+    return styles
 
 
 # ---------------------------------------------------------------------
@@ -396,7 +436,7 @@ with placeholder.container():
         ]
         st.caption(
             f"OI delta columns compare against snapshot from ~{oi_lookback_mins} min ago. "
-            f"OI change columns show full-day open interest change."
+            f"OI change columns show full-day open interest change. Top 3 highest OI & OI changes are highlighted."
         )
     else:
         cols_to_show = [
@@ -411,14 +451,14 @@ with placeholder.container():
             "pe_oi",
         ]
         st.caption(
-            "OI delta columns will appear after the initial lookback window passes."
+            "OI delta columns will appear after the initial lookback window passes. Top 3 highest OI & OI changes are highlighted."
         )
 
     # Filter columns that exist in DataFrame
     cols_to_show = [c for c in cols_to_show if c in display_df.columns]
     chain_display = display_df[cols_to_show].copy()
 
-    # Precision and sign formatting
+    # Precision and sign formatting dictionary
     chain_format = {}
     if "strike" in chain_display.columns:
         chain_format["strike"] = "{:,.0f}"
@@ -443,11 +483,15 @@ with placeholder.container():
     if "pe_oi" in chain_display.columns:
         chain_format["pe_oi"] = "{:,.0f}"
 
+    # Apply formatting AND Top-3 Color Heatmap styling
+    styled_chain = (
+        chain_display.style
+        .format(chain_format, na_rep="—")
+        .apply(highlight_top3_chain, axis=None)
+    )
+
     st.dataframe(
-        chain_display.style.format(
-            chain_format,
-            na_rep="—",
-        ),
+        styled_chain,
         hide_index=True,
         use_container_width=True,
         height=450,
