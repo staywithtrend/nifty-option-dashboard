@@ -80,7 +80,7 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("## 🎯 Symbol & Expiry Selection")
 selected_index = st.sidebar.selectbox("Select Index", ["NIFTY", "BANKNIFTY", "FINNIFTY"], index=0)
 
-# Updated Lot Size configurations
+# Lot Size configurations
 SYMBOL_CONFIG = {
     "NIFTY": {"fyers_symbol": "NSE:NIFTY50-INDEX", "step": 50, "lot_size": 65},
     "BANKNIFTY": {"fyers_symbol": "NSE:NIFTYBANK-INDEX", "step": 100, "lot_size": 30},
@@ -227,7 +227,7 @@ if access_token:
             st.markdown("---")
 
             # ---------------------------------------------------------------
-            # TOP 3 HIGHEST OI & HIGHEST CHANGE IN OI (IN CONTRACTS)
+            # TOP 3 HIGHEST OI & HIGHEST CHANGE IN OI (WITH TOTAL ROW)
             # ---------------------------------------------------------------
             st.subheader("🔥 Top 3 Highest OI & Highest Change in OI (Contracts)")
 
@@ -243,10 +243,25 @@ if access_token:
                 if d.empty:
                     return d
                 res = d.copy()
+
+                # Calculate totals for top 3
+                tot_oi = res['oi_contracts'].sum()
+                tot_oichg = res['oich_contracts'].sum()
+
+                # Format existing rows
+                res['strike_price'] = res['strike_price'].astype(int).astype(str)
+                res['oi_contracts'] = res['oi_contracts'].apply(lambda x: f"{int(x):,}")
+                res['oich_contracts'] = res['oich_contracts'].apply(lambda x: f"{int(x):+,}")
+
+                # Append Total Row
+                tot_row = pd.DataFrame([{
+                    'strike_price': 'Total',
+                    'oi_contracts': f"{int(tot_oi):,}",
+                    'oich_contracts': f"{int(tot_oichg):+,}"
+                }])
+
+                res = pd.concat([res, tot_row], ignore_index=True)
                 res.columns = ['Strike', 'OI (Contracts)', 'OI Chg (Contracts)']
-                res['Strike'] = res['Strike'].astype(int)
-                res['OI (Contracts)'] = res['OI (Contracts)'].apply(lambda x: f"{int(x):,}")
-                res['OI Chg (Contracts)'] = res['OI Chg (Contracts)'].apply(lambda x: f"{int(x):+,}")
                 return res
 
             with t1:
