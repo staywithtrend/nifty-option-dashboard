@@ -324,9 +324,9 @@ if access_token:
             st.markdown("---")
 
             # ---------------------------------------------------------------
-            # OPTION CHAIN TABLE WITH GRADIENT COLOR CODING
+            # OPTION CHAIN TABLE WITH TOP 3 HIGHLIGHTING ONLY
             # ---------------------------------------------------------------
-            st.subheader("📋 Option Chain (Blue Gradient = Call, Red Gradient = Put)")
+            st.subheader("📋 Option Chain (Only Top 3 OI & OI Chg Highlighted)")
 
             days_to_exp = 3.0
             if selected_expiry and selected_expiry != "Current Expiry":
@@ -366,23 +366,82 @@ if access_token:
 
             chain_df = pd.DataFrame(table_rows)
 
-            # Apply Gradient Styles using Pandas Styler
-            styled_chain = chain_df.style \
-                .background_gradient(subset=['Call OI', 'Call OI Chg'], cmap='Blues') \
-                .background_gradient(subset=['Put OI', 'Put OI Chg'], cmap='Reds') \
-                .format({
-                    "Call OI": "{:,}",
-                    "Call OI Chg": "{:+,}",
-                    "Call IV": "{:.2f}",
-                    "Call Price": "{:.2f}",
-                    "Strike Price": "{:d}",
-                    "Put Price": "{:.2f}",
-                    "Put IV": "{:.2f}",
-                    "Put OI Chg": "{:+,}",
-                    "Put OI": "{:,}"
-                })
+            # Function to style ONLY top 3 values per column
+            def style_top3_only(df):
+                styles = pd.DataFrame('', index=df.index, columns=df.columns)
 
+                def apply_colors(series, col_name, color_map):
+                    # Sort unique non-zero values descending
+                    unique_vals = sorted([v for v in series.unique() if v > 0], reverse=True)
+                    top3_vals = unique_vals[:3]
+                    
+                    for idx, val in series.items():
+                        if val in top3_vals:
+                            rank = top3_vals.index(val) + 1
+                            styles.loc[idx, col_name] = color_map[rank]
+
+                # Call colors (Rank 1 = Darkest Blue, Rank 3 = Lightest Blue)
+                call_oi_colors = {
+                    1: 'background-color: #0D47A1; color: white; font-weight: bold;',
+                    2: 'background-color: #1976D2; color: white; font-weight: bold;',
+                    3: 'background-color: #64B5F6; color: black; font-weight: bold;'
+                }
+                call_oichg_colors = {
+                    1: 'background-color: #1565C0; color: white; font-weight: bold;',
+                    2: 'background-color: #2196F3; color: white; font-weight: bold;',
+                    3: 'background-color: #90CAF9; color: black; font-weight: bold;'
+                }
+
+                # Put colors (Rank 1 = Darkest Red, Rank 3 = Lightest Red)
+                put_oi_colors = {
+                    1: 'background-color: #B71C1C; color: white; font-weight: bold;',
+                    2: 'background-color: #D32F2F; color: white; font-weight: bold;',
+                    3: 'background-color: #EF5350; color: white; font-weight: bold;'
+                }
+                put_oichg_colors = {
+                    1: 'background-color: #C62828; color: white; font-weight: bold;',
+                    2: 'background-color: #F44336; color: white; font-weight: bold;',
+                    3: 'background-color: #E57373; color: black; font-weight: bold;'
+                }
+
+                apply_colors(df['Call OI'], 'Call OI', call_oi_colors)
+                apply_colors(df['Call OI Chg'], 'Call OI Chg', call_oichg_colors)
+                apply_colors(df['Put OI'], 'Put OI', put_oi_colors)
+                apply_colors(df['Put OI Chg'], 'Put OI Chg', put_oichg_colors)
+
+                return styles
+
+            styled_chain = chain_df.style.apply(style_top3_only, axis=None).format({
+                "Call OI": "{:,}",
+                "Call OI Chg": "{:+,}",
+                "Call IV": "{:.2f}",
+                "Call Price": "{:.2f}",
+                "Strike Price": "{:d}",
+                "Put Price": "{:.2f}",
+                "Put IV": "{:.2f}",
+                "Put OI Chg": "{:+,}",
+                "Put OI": "{:,}"
+            })
+
+            # Render Table
             st.dataframe(styled_chain, use_container_width=True, hide_index=True)
+
+            # ---------------------------------------------------------------
+            # FIXED SUMMARY BAR BELOW TABLE (TOTAL OI & CHANGE IN OI)
+            # ---------------------------------------------------------------
+            st.markdown("---")
+            st.subheader("📌 Option Chain Totals (Fixed Below Table)")
+
+            tot_c_oi = chain_df['Call OI'].sum()
+            tot_c_oichg = chain_df['Call OI Chg'].sum()
+            tot_p_oi = chain_df['Put OI'].sum()
+            tot_p_oichg = chain_df['Put OI Chg'].sum()
+
+            b1, b2, b3, b4 = st.columns(4)
+            b1.metric("Total Call OI", f"{tot_c_oi:,}")
+            b2.metric("Total Call OI Change", f"{tot_c_oichg:+,}")
+            b3.metric("Total Put OI Change", f"{tot_p_oichg:+,}")
+            b4.metric("Total Put OI", f"{tot_p_oi:,}")
 
 else:
     st.info("👈 Enter your **FYERS Access Token** in the sidebar to load the dashboard.")
