@@ -16,18 +16,18 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------------
-# CUSTOM CSS FOR COMPACT FONTS & NO TRUNCATION
+# CUSTOM CSS FOR COMPACT FONTS & SCALED TABLES
 # -------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* Global Sans-Serif Clean Typography */
+    /* Global Clean Typography */
     html, body, [class*="css"] {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
     
     /* Reduced Heading Sizes */
-    h1 { font-size: 1.6rem !important; font-weight: 700 !important; margin-bottom: 0.5rem !important; }
-    h2 { font-size: 1.3rem !important; font-weight: 600 !important; margin-top: 1rem !important; }
+    h1 { font-size: 1.5rem !important; font-weight: 700 !important; margin-bottom: 0.5rem !important; }
+    h2 { font-size: 1.25rem !important; font-weight: 600 !important; margin-top: 1rem !important; }
     h3 { font-size: 1.1rem !important; font-weight: 600 !important; }
     h4 { font-size: 0.95rem !important; font-weight: 600 !important; }
 
@@ -233,7 +233,7 @@ if access_token:
 
             pcr = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 0.0
 
-            # --- 1 SD EXPECTED MOVE CALCULATION ---
+            # ATM IV Calculation & Expected Move
             atm_ce_row = ce_df[ce_df['strike_price'] == atm_strike]
             atm_pe_row = pe_df[pe_df['strike_price'] == atm_strike]
             
@@ -247,7 +247,7 @@ if access_token:
             sd_lower = spot_price - expected_move_pts
 
             # ---------------------------------------------------------------
-            # HEADER & SUMMARY METRICS
+            # HEADER & METRICS
             # ---------------------------------------------------------------
             st.markdown(f"# ⚡ {selected_index} Options Analytics")
             st.markdown(f"**Spot Price:** `{spot_price:.2f}` | **ATM Strike:** `{int(atm_strike)}` | **Expiry:** `{selected_expiry}` (`{days_to_exp}` Days) | **ATM IV:** `{avg_atm_iv:.2f}%`")
@@ -258,15 +258,15 @@ if access_token:
             
             with m1:
                 st.metric(label="🧱 Call / Put Walls", value=f"{call_wall_strike} / {put_wall_strike}")
-                st.caption(f"Call Resistance / Put Support")
+                st.caption("Call Res / Put Supp")
 
             with m2:
                 st.metric(label="📉 Net OI Diff (Put - Call)", value=f"{net_oi_diff:+,}")
-                st.caption(f"Total Put OI - Total Call OI")
+                st.caption("Total Put OI - Call OI")
 
             with m3:
                 st.metric(label="⚡ Net OI Chg Diff", value=f"{net_oichg_diff:+,}")
-                st.caption(f"Put Chg - Call Chg")
+                st.caption("Put Chg - Call Chg")
 
             with m4:
                 st.metric(label="📊 PCR Ratio", value=f"{pcr}")
@@ -280,7 +280,7 @@ if access_token:
             st.markdown("---")
 
             # ---------------------------------------------------------------
-            # TOP 3 HIGHEST OI & OI CHANGE TABLES (2-ROW SPACIOUS GRID)
+            # TOP 3 TABLES
             # ---------------------------------------------------------------
             st.markdown("### 🔥 Top 3 Highest OI & Highest Change in OI")
 
@@ -329,9 +329,9 @@ if access_token:
             st.markdown("---")
 
             # ---------------------------------------------------------------
-            # STRIKE-BY-STRIKE DIFFERENCES TABLE
+            # STRIKE DIFFERENCES & OPTION CHAIN TABLE
             # ---------------------------------------------------------------
-            st.markdown("### 📋 Option Differences Table (Put minus Call)")
+            st.markdown("### 📋 Option Chain & Differences Table")
 
             strikes = sorted(df['strike_price'].unique())
             filtered_strikes = [s for s in strikes if abs(s - atm_strike) <= (10 * strike_step)]
@@ -349,67 +349,91 @@ if access_token:
                 p_oichg = int(p_row['oich_contracts'].values[0]) if not p_row.empty else 0
                 p_iv = extract_iv_from_row(p_row, spot_price, s, T, 'PE')
 
-                # Requested Calculations
+                # Calculated differences
                 oi_diff = p_oi - c_oi
                 oichg_diff = p_oichg - c_oichg
                 iv_skew = p_iv - c_iv
 
                 diff_rows.append({
-                    "Strike": int(s),
-                    "Put OI - Call OI": oi_diff,
-                    "Put OI Chg - Call OI Chg": oichg_diff,
-                    "PE IV - CE IV": round(iv_skew, 2),
                     "Call OI": c_oi,
-                    "Put OI": p_oi,
+                    "Call OI Chg": c_oichg,
                     "Call IV": c_iv,
-                    "PE IV": p_iv
+                    "Strike": int(s),
+                    "Put IV": p_iv,
+                    "Put OI Chg": p_oichg,
+                    "Put OI": p_oi,
+                    "Put - Call OI": oi_diff,
+                    "Put - Call Chg": oichg_diff,
+                    "PE - CE IV": round(iv_skew, 2)
                 })
 
             diff_df = pd.DataFrame(diff_rows)
 
-            # Styling Difference Columns
             def style_diffs(val):
                 if isinstance(val, (int, float)):
                     if val > 0:
-                        return 'color: #2e7d32; font-weight: bold;' # Green for positive put excess
+                        return 'color: #2e7d32; font-weight: bold;'
                     elif val < 0:
-                        return 'color: #c62828; font-weight: bold;' # Red for negative call excess
+                        return 'color: #c62828; font-weight: bold;'
                 return ''
 
-            styled_diff_df = diff_df.style.applymap(
-                style_diffs, subset=['Put OI - Call OI', 'Put OI Chg - Call OI Chg', 'PE IV - CE IV']
+            # FIXED: Used .map() instead of deprecated .applymap()
+            styled_diff_df = diff_df.style.map(
+                style_diffs, subset=['Put - Call OI', 'Put - Call Chg', 'PE - CE IV']
             ).format({
-                "Strike": "{:d}",
-                "Put OI - Call OI": "{:+,}",
-                "Put OI Chg - Call OI Chg": "{:+,}",
-                "PE IV - CE IV": "{:+.2f}",
                 "Call OI": "{:,}",
-                "Put OI": "{:,}",
+                "Call OI Chg": "{:+,}",
                 "Call IV": "{:.2f}",
-                "PE IV": "{:.2f}"
+                "Strike": "{:d}",
+                "Put IV": "{:.2f}",
+                "Put OI Chg": "{:+,}",
+                "Put OI": "{:,}",
+                "Put - Call OI": "{:+,}",
+                "Put - Call Chg": "{:+,}",
+                "PE - CE IV": "{:+.2f}"
             })
 
             st.dataframe(styled_diff_df, use_container_width=True, hide_index=True)
 
+            st.markdown("---")
+
             # ---------------------------------------------------------------
-            # STACKED PLOTLY OI DIFFERENCE CHART
+            # OI DISTRIBUTION CHARTS
             # ---------------------------------------------------------------
-            st.markdown("### 📊 OI Difference Chart (Put OI - Call OI)")
-            
+            st.markdown("### 📊 OI Distribution Charts")
+
+            chart_ce = ce_df[ce_df['strike_price'].isin(filtered_strikes)].sort_values('strike_price')
+            chart_pe = pe_df[pe_df['strike_price'].isin(filtered_strikes)].sort_values('strike_price')
+
+            # Chart 1: Total OI Distribution
+            fig_total = go.Figure()
+            fig_total.add_trace(go.Bar(
+                x=chart_ce['strike_price'], y=chart_ce['oi_contracts'],
+                name='Call OI (Resistance)', marker_color='#1E88E5'
+            ))
+            fig_total.add_trace(go.Bar(
+                x=chart_pe['strike_price'], y=chart_pe['oi_contracts'],
+                name='Put OI (Support)', marker_color='#E53935'
+            ))
+            fig_total.update_layout(
+                title="Total Open Interest Distribution (Call vs Put)",
+                barmode='group', xaxis_title='Strike Price', yaxis_title='Contracts',
+                margin=dict(l=20, r=20, t=40, b=20), height=350
+            )
+            st.plotly_chart(fig_total, use_container_width=True)
+
+            # Chart 2: Net OI Difference (Put - Call)
             fig_diff = go.Figure()
-            colors = ['#2e7d32' if x >= 0 else '#c62828' for x in diff_df['Put OI - Call OI']]
+            colors = ['#2e7d32' if x >= 0 else '#c62828' for x in diff_df['Put - Call OI']]
             
             fig_diff.add_trace(go.Bar(
-                x=diff_df['Strike'],
-                y=diff_df['Put OI - Call OI'],
-                marker_color=colors,
-                name='Net OI Difference'
+                x=diff_df['Strike'], y=diff_df['Put - Call OI'],
+                marker_color=colors, name='Net OI Difference'
             ))
             fig_diff.update_layout(
-                xaxis_title='Strike Price',
-                yaxis_title='Put OI - Call OI (Contracts)',
-                margin=dict(l=20, r=20, t=20, b=20),
-                height=350
+                title="Net OI Difference (Put OI minus Call OI)",
+                xaxis_title='Strike Price', yaxis_title='Contracts Difference',
+                margin=dict(l=20, r=20, t=40, b=20), height=350
             )
             st.plotly_chart(fig_diff, use_container_width=True)
 
