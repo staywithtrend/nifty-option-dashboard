@@ -20,18 +20,14 @@ st.set_page_config(
 # -------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* Global Clean Typography */
     html, body, [class*="css"] {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
-    
-    /* Reduced Heading Sizes */
     h1 { font-size: 1.5rem !important; font-weight: 700 !important; margin-bottom: 0.5rem !important; }
     h2 { font-size: 1.25rem !important; font-weight: 600 !important; margin-top: 1rem !important; }
     h3 { font-size: 1.1rem !important; font-weight: 600 !important; }
     h4 { font-size: 0.95rem !important; font-weight: 600 !important; }
 
-    /* Compact Metric Boxes */
     [data-testid="stMetric"] {
         background-color: #f8f9fa;
         border: 1px solid #e9ecef;
@@ -54,7 +50,6 @@ st.markdown("""
         font-size: 0.75rem !important;
     }
 
-    /* Small & Compact Dataframe Text */
     .stDataFrame {
         font-size: 0.82rem !important;
     }
@@ -122,8 +117,16 @@ def extract_iv_from_row(row_series, spot_price, strike_price, T, option_type):
 # SIDEBAR CONTROLS
 # -------------------------------------------------------------------
 st.sidebar.markdown("### 🔑 FYERS Credentials")
-app_id = st.sidebar.text_input("FYERS App ID", value="IONVEW8SCZ-100")
-access_token = st.sidebar.text_input("FYERS Access Token", type="password")
+raw_app_id = st.sidebar.text_input("FYERS App ID", value="IONVEW8SCZ-100")
+raw_access_token = st.sidebar.text_input("FYERS Access Token", type="password")
+
+# --- AUTO-SANITIZE INPUTS (Removes extra spaces, newlines, and quotes) ---
+app_id = raw_app_id.strip().replace('"', '').replace("'", "")
+access_token = raw_access_token.strip().replace('"', '').replace("'", "")
+
+if st.sidebar.button("🧹 Clear Cache & Refresh"):
+    st.cache_data.clear()
+    st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🎯 Symbol Selection")
@@ -138,12 +141,15 @@ SYMBOL_CONFIG = {
 # -------------------------------------------------------------------
 # API FETCH FUNCTION
 # -------------------------------------------------------------------
-@st.cache_data(ttl=10)
-def fetch_fyers_data(app_id, token, symbol):
-    if not token or not app_id:
+@st.cache_data(ttl=5)
+def fetch_fyers_data(app_id_val, token_val, symbol):
+    if not token_val or not app_id_val:
         return None, 0.0, "App ID and Access Token are required."
 
-    headers = {"Authorization": f"{app_id}:{token}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"{app_id_val}:{token_val}",
+        "Content-Type": "application/json"
+    }
     chain_url = f"https://api-t1.fyers.in/data/options-chain-v3?symbol={symbol}&strikecount=30&greeks=1"
     quotes_url = f"https://api-t1.fyers.in/data/quotes?symbols={symbol}"
     
@@ -190,7 +196,6 @@ if access_token:
         
         selected_expiry = st.sidebar.selectbox("Select Expiry Date", expiry_list, index=0) if expiry_list else "Current Expiry"
 
-        # Calculate Days to Expiry (DTE)
         days_to_exp = 3.0
         if selected_expiry and selected_expiry != "Current Expiry":
             try:
@@ -215,14 +220,12 @@ if access_token:
             strike_step = config["step"]
             atm_strike = round(spot_price / strike_step) * strike_step if spot_price > 0 else df['strike_price'].median()
 
-            # Walls
             call_wall_row = ce_df.loc[ce_df['oi_contracts'].idxmax()] if not ce_df.empty else None
             put_wall_row = pe_df.loc[pe_df['oi_contracts'].idxmax()] if not pe_df.empty else None
 
             call_wall_strike = int(call_wall_row['strike_price']) if call_wall_row is not None else 0
             put_wall_strike = int(put_wall_row['strike_price']) if put_wall_row is not None else 0
 
-            # Totals & Differences
             total_call_oi = int(ce_df['oi_contracts'].sum()) if not ce_df.empty else 0
             total_put_oi = int(pe_df['oi_contracts'].sum()) if not pe_df.empty else 0
             net_oi_diff = total_put_oi - total_call_oi
@@ -233,7 +236,6 @@ if access_token:
 
             pcr = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 0.0
 
-            # ATM IV Calculation & Expected Move
             atm_ce_row = ce_df[ce_df['strike_price'] == atm_strike]
             atm_pe_row = pe_df[pe_df['strike_price'] == atm_strike]
             
@@ -246,42 +248,31 @@ if access_token:
             sd_upper = spot_price + expected_move_pts
             sd_lower = spot_price - expected_move_pts
 
-            # ---------------------------------------------------------------
-            # HEADER & METRICS
-            # ---------------------------------------------------------------
             st.markdown(f"# ⚡ {selected_index} Options Analytics")
             st.markdown(f"**Spot Price:** `{spot_price:.2f}` | **ATM Strike:** `{int(atm_strike)}` | **Expiry:** `{selected_expiry}` (`{days_to_exp}` Days) | **ATM IV:** `{avg_atm_iv:.2f}%`")
 
             st.markdown("### 📊 Market Summary & Differences")
 
             m1, m2, m3, m4, m5 = st.columns(5)
-            
             with m1:
                 st.metric(label="🧱 Call / Put Walls", value=f"{call_wall_strike} / {put_wall_strike}")
                 st.caption("Call Res / Put Supp")
-
             with m2:
                 st.metric(label="📉 Net OI Diff (Put - Call)", value=f"{net_oi_diff:+,}")
                 st.caption("Total Put OI - Call OI")
-
             with m3:
                 st.metric(label="⚡ Net OI Chg Diff", value=f"{net_oichg_diff:+,}")
                 st.caption("Put Chg - Call Chg")
-
             with m4:
                 st.metric(label="📊 PCR Ratio", value=f"{pcr}")
                 sentiment = "🐂 Bullish" if pcr > 1.25 else ("🐻 Bearish" if pcr < 0.75 else "⚖️ Neutral")
                 st.caption(f"Sentiment: **{sentiment}**")
-
             with m5:
                 st.metric(label="🎯 1 SD Expected Move", value=f"±{expected_move_pts:.1f} pts")
                 st.caption(f"Range: **{sd_lower:.0f} - {sd_upper:.0f}**")
 
             st.markdown("---")
 
-            # ---------------------------------------------------------------
-            # TOP 3 TABLES
-            # ---------------------------------------------------------------
             st.markdown("### 🔥 Top 3 Highest OI & Highest Change in OI")
 
             top_call_oi = ce_df.nlargest(3, 'oi_contracts')[['strike_price', 'oi_contracts', 'oich_contracts']] if not ce_df.empty else pd.DataFrame()
@@ -328,9 +319,6 @@ if access_token:
 
             st.markdown("---")
 
-            # ---------------------------------------------------------------
-            # STRIKE DIFFERENCES & OPTION CHAIN TABLE
-            # ---------------------------------------------------------------
             st.markdown("### 📋 Option Chain & Differences Table")
 
             strikes = sorted(df['strike_price'].unique())
@@ -349,7 +337,6 @@ if access_token:
                 p_oichg = int(p_row['oich_contracts'].values[0]) if not p_row.empty else 0
                 p_iv = extract_iv_from_row(p_row, spot_price, s, T, 'PE')
 
-                # Calculated differences
                 oi_diff = p_oi - c_oi
                 oichg_diff = p_oichg - c_oichg
                 iv_skew = p_iv - c_iv
@@ -396,15 +383,12 @@ if access_token:
 
             st.markdown("---")
 
-            # ---------------------------------------------------------------
-            # OI DISTRIBUTION & CHANGE CHARTS
-            # ---------------------------------------------------------------
             st.markdown("### 📊 OI Distribution & Change Charts")
 
             chart_ce = ce_df[ce_df['strike_price'].isin(filtered_strikes)].sort_values('strike_price')
             chart_pe = pe_df[pe_df['strike_price'].isin(filtered_strikes)].sort_values('strike_price')
 
-            # 1. Total OI Distribution (Grouped Bar Chart)
+            # 1. Total OI Distribution
             fig_total = go.Figure()
             fig_total.add_trace(go.Bar(
                 x=chart_ce['strike_price'], y=chart_ce['oi_contracts'],
@@ -421,7 +405,7 @@ if access_token:
             )
             st.plotly_chart(fig_total, use_container_width=True)
 
-            # 2. Change in OI (Call OI Chg vs Put OI Chg - Grouped Bar Chart)
+            # 2. Change in OI
             fig_oichg = go.Figure()
             fig_oichg.add_trace(go.Bar(
                 x=chart_ce['strike_price'], y=chart_ce['oich_contracts'],
@@ -438,10 +422,9 @@ if access_token:
             )
             st.plotly_chart(fig_oichg, use_container_width=True)
 
-            # 3. Net OI Difference (Put OI minus Call OI)
+            # 3. Net OI Difference
             fig_diff = go.Figure()
             colors_diff = ['#2e7d32' if x >= 0 else '#c62828' for x in diff_df['Put - Call OI']]
-            
             fig_diff.add_trace(go.Bar(
                 x=diff_df['Strike'], y=diff_df['Put - Call OI'],
                 marker_color=colors_diff, name='Net OI Difference'
@@ -453,10 +436,9 @@ if access_token:
             )
             st.plotly_chart(fig_diff, use_container_width=True)
 
-            # 4. Net OI Change Difference (Put OI Chg minus Call OI Chg)
+            # 4. Net OI Change Difference
             fig_oichg_diff = go.Figure()
             colors_oichg_diff = ['#2e7d32' if x >= 0 else '#c62828' for x in diff_df['Put - Call Chg']]
-            
             fig_oichg_diff.add_trace(go.Bar(
                 x=diff_df['Strike'], y=diff_df['Put - Call Chg'],
                 marker_color=colors_oichg_diff, name='Net OI Chg Difference'
