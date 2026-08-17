@@ -377,7 +377,6 @@ if access_token:
                         return 'color: #c62828; font-weight: bold;'
                 return ''
 
-            # FIXED: Used .map() instead of deprecated .applymap()
             styled_diff_df = diff_df.style.map(
                 style_diffs, subset=['Put - Call OI', 'Put - Call Chg', 'PE - CE IV']
             ).format({
@@ -398,14 +397,14 @@ if access_token:
             st.markdown("---")
 
             # ---------------------------------------------------------------
-            # OI DISTRIBUTION CHARTS
+            # OI DISTRIBUTION & CHANGE CHARTS
             # ---------------------------------------------------------------
-            st.markdown("### 📊 OI Distribution Charts")
+            st.markdown("### 📊 OI Distribution & Change Charts")
 
             chart_ce = ce_df[ce_df['strike_price'].isin(filtered_strikes)].sort_values('strike_price')
             chart_pe = pe_df[pe_df['strike_price'].isin(filtered_strikes)].sort_values('strike_price')
 
-            # Chart 1: Total OI Distribution
+            # 1. Total OI Distribution (Grouped Bar Chart)
             fig_total = go.Figure()
             fig_total.add_trace(go.Bar(
                 x=chart_ce['strike_price'], y=chart_ce['oi_contracts'],
@@ -422,13 +421,30 @@ if access_token:
             )
             st.plotly_chart(fig_total, use_container_width=True)
 
-            # Chart 2: Net OI Difference (Put - Call)
+            # 2. Change in OI (Call OI Chg vs Put OI Chg - Grouped Bar Chart)
+            fig_oichg = go.Figure()
+            fig_oichg.add_trace(go.Bar(
+                x=chart_ce['strike_price'], y=chart_ce['oich_contracts'],
+                name='Call OI Change', marker_color='#1565C0'
+            ))
+            fig_oichg.add_trace(go.Bar(
+                x=chart_pe['strike_price'], y=chart_pe['oich_contracts'],
+                name='Put OI Change', marker_color='#C62828'
+            ))
+            fig_oichg.update_layout(
+                title="Change in Open Interest (Call vs Put)",
+                barmode='group', xaxis_title='Strike Price', yaxis_title='Change in Contracts',
+                margin=dict(l=20, r=20, t=40, b=20), height=350
+            )
+            st.plotly_chart(fig_oichg, use_container_width=True)
+
+            # 3. Net OI Difference (Put OI minus Call OI)
             fig_diff = go.Figure()
-            colors = ['#2e7d32' if x >= 0 else '#c62828' for x in diff_df['Put - Call OI']]
+            colors_diff = ['#2e7d32' if x >= 0 else '#c62828' for x in diff_df['Put - Call OI']]
             
             fig_diff.add_trace(go.Bar(
                 x=diff_df['Strike'], y=diff_df['Put - Call OI'],
-                marker_color=colors, name='Net OI Difference'
+                marker_color=colors_diff, name='Net OI Difference'
             ))
             fig_diff.update_layout(
                 title="Net OI Difference (Put OI minus Call OI)",
@@ -436,6 +452,21 @@ if access_token:
                 margin=dict(l=20, r=20, t=40, b=20), height=350
             )
             st.plotly_chart(fig_diff, use_container_width=True)
+
+            # 4. Net OI Change Difference (Put OI Chg minus Call OI Chg)
+            fig_oichg_diff = go.Figure()
+            colors_oichg_diff = ['#2e7d32' if x >= 0 else '#c62828' for x in diff_df['Put - Call Chg']]
+            
+            fig_oichg_diff.add_trace(go.Bar(
+                x=diff_df['Strike'], y=diff_df['Put - Call Chg'],
+                marker_color=colors_oichg_diff, name='Net OI Chg Difference'
+            ))
+            fig_oichg_diff.update_layout(
+                title="Net OI Change Difference (Put OI Change minus Call OI Change)",
+                xaxis_title='Strike Price', yaxis_title='Change Contracts Difference',
+                margin=dict(l=20, r=20, t=40, b=20), height=350
+            )
+            st.plotly_chart(fig_oichg_diff, use_container_width=True)
 
 else:
     st.info("👈 Please enter your **FYERS Access Token** in the sidebar to view data.")
