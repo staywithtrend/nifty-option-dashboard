@@ -1,9 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
-import numpy as np
-import math
-from datetime import datetime, date
+from datetime import datetime
 
 # -------------------------------------------------------------------
 # PAGE CONFIGURATION
@@ -15,74 +13,12 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------------
-# BLACK-SCHOLES IV SOLVER
-# -------------------------------------------------------------------
-def cdf(x):
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-def pdf(x):
-    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
-
-def bs_call_price(S, K, T, r, sigma):
-    if T <= 0 or sigma <= 0:
-        return max(0.0, S - K)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-    d2 = d1 - sigma * math.sqrt(T)
-    return S * cdf(d1) - K * math.exp(-r * T) * cdf(d2)
-
-def bs_put_price(S, K, T, r, sigma):
-    if T <= 0 or sigma <= 0:
-        return max(0.0, K - S)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-    d2 = d1 - sigma * math.sqrt(T)
-    return K * math.exp(-r * T) * cdf(-d2) - S * cdf(-d1)
-
-def calculate_iv(price, S, K, T, option_type='CE', r=0.07):
-    """Calculates Implied Volatility (%) using Newton-Raphson & Bisection fallback"""
-    if price <= 0 or S <= 0 or K <= 0 or T <= 0:
-        return 0.0
-
-    intrinsic = max(0.0, S - K) if option_type == 'CE' else max(0.0, K - S)
-    if price <= intrinsic:
-        return 0.0
-
-    # Newton-Raphson Method
-    sigma = 0.20
-    for _ in range(30):
-        p = bs_call_price(S, K, T, r, sigma) if option_type == 'CE' else bs_put_price(S, K, T, r, sigma)
-        diff = p - price
-        if abs(diff) < 1e-4:
-            return sigma * 100.0
-        
-        d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-        vega = S * math.sqrt(T) * pdf(d1)
-        if vega < 1e-6:
-            break
-        sigma = sigma - diff / vega
-        if sigma <= 0:
-            break
-
-    # Bisection Fallback
-    low, high = 0.001, 5.0
-    for _ in range(35):
-        mid = (low + high) / 2.0
-        p = bs_call_price(S, K, T, r, mid) if option_type == 'CE' else bs_put_price(S, K, T, r, mid)
-        if abs(p - price) < 1e-4:
-            return mid * 100.0
-        if p < price:
-            low = mid
-        else:
-            high = mid
-            
-    return ((low + high) / 2.0) * 100.0
-
-# -------------------------------------------------------------------
 # SIDEBAR CONTROLS
 # -------------------------------------------------------------------
 st.sidebar.markdown("## 🔑 FYERS API Login")
 
-app_id = st.sidebar.text_input("FYERS App ID", value="IONVEW8SCZ-100")
-access_token = st.sidebar.text_input("FYERS Access Token", type="password")
+app_id = st.sidebar.text_input("FYERS App ID", value="IONVEW8SCZ-100", help="Must include -100 suffix")
+access_token = st.sidebar.text_input("FYERS Access Token", type="password", help="Paste your long access token")
 
 st.sidebar.markdown("---")
 selected_index = st.sidebar.selectbox("Index", ["NIFTY", "BANKNIFTY", "FINNIFTY"], index=0)
@@ -166,7 +102,7 @@ if access_token:
             total_put_oi = int(pe_df['oi'].sum()) if 'oi' in pe_df.columns else 0
             pcr = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 0.0
 
-            # Max Pain
+            # Max Pain Calculation
             strikes = sorted(df['strike_price'].unique())
             pain_dict = {}
             for s in strikes:
@@ -215,21 +151,8 @@ if access_token:
             st.markdown("---")
 
             # ---------------------------------------------------------------
-            # EXACT ORIGINAL OPTION CHAIN TABLE
+            # OPTION CHAIN TABLE WITH NATIVE FYERS IV
             # ---------------------------------------------------------------
-            # Determine days to expiry for IV calculation
-            days_to_expiry = 3.0
-            if "expiryData" in chain_payload and len(chain_payload["expiryData"]) > 0:
-                exp_date_str = chain_payload["expiryData"][0].get("date", "")
-                try:
-                    exp_dt = datetime.strptime(exp_date_str, "%Y-%m-%d").date()
-                    days_to_expiry = max((exp_dt - date.today()).days, 0.5)
-                except Exception:
-                    pass
-            
-            T = days_to_expiry / 365.0
-            vix_fallback = float(chain_payload.get("indiavixData", {}).get("ltp", 14.0)) if isinstance(chain_payload.get("indiavixData"), dict) else 14.0
-
             # Filter strikes around ATM (± 8 strikes)
             filtered_strikes = [s for s in strikes if abs(s - atm_strike) <= (8 * strike_step)]
             filtered_strikes.sort()
@@ -242,26 +165,25 @@ if access_token:
                 c_oi = int(c_row['oi'].values[0]) if not c_row.empty and 'oi' in c_row.columns else 0
                 c_oichg = int(c_row['oich'].values[0]) if not c_row.empty and 'oich' in c_row.columns else 0
                 c_ltp = float(c_row['ltp'].values[0]) if not c_row.empty and 'ltp' in c_row.columns else 0.0
+                
+                # Extract native FYERS IV directly
+                c_iv = float(c_row['iv'].values[0]) if not c_row.empty and 'iv' in c_row.columns and pd.notnull(c_row['iv'].values[0]) else 0.0
 
                 p_ltp = float(p_row['ltp'].values[0]) if not p_row.empty and 'ltp' in p_row.columns else 0.0
                 p_oichg = int(p_row['oich'].values[0]) if not p_row.empty and 'oich' in p_row.columns else 0
                 p_oi = int(p_row['oi'].values[0]) if not p_row.empty and 'oi' in p_row.columns else 0
-
-                # Dynamic BS IV Calculation
-                calc_c_iv = calculate_iv(c_ltp, spot_price, s, T, 'CE')
-                calc_p_iv = calculate_iv(p_ltp, spot_price, s, T, 'PE')
-
-                c_iv_final = calc_c_iv if calc_c_iv > 0 else vix_fallback
-                p_iv_final = calc_p_iv if calc_p_iv > 0 else vix_fallback
+                
+                # Extract native FYERS IV directly
+                p_iv = float(p_row['iv'].values[0]) if not p_row.empty and 'iv' in p_row.columns and pd.notnull(p_row['iv'].values[0]) else 0.0
 
                 table_rows.append({
                     "Call OI": f"{c_oi:,}",
                     "Call OI Chg": f"{c_oichg:+,}",
-                    "Call IV": f"{c_iv_final:.2f}",
+                    "Call IV": f"{c_iv:.2f}",
                     "Call Price": f"{c_ltp:.2f}",
                     "Strike Price": f"👉 {s}" if s == atm_strike else f"{s}",
                     "Put Price": f"{p_ltp:.2f}",
-                    "Put IV": f"{p_iv_final:.2f}",
+                    "Put IV": f"{p_iv:.2f}",
                     "Put OI Chg": f"{p_oichg:+,}",
                     "Put OI": f"{p_oi:,}"
                 })
