@@ -5,3 +5,4 @@ pnsea==1.1
 altair
 fyers-apiv3
 plotly
+matplotlib
