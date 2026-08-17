@@ -3,3 +3,4 @@ requests>=2.31
 pandas>=2.0
 pnsea==1.1
 altair
+fyers-apiv3
