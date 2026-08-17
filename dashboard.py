@@ -1,31 +1,70 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
+import math
+from datetime import datetime, date
 
 # -------------------------------------------------------------------
 # PAGE CONFIGURATION
 # -------------------------------------------------------------------
 st.set_page_config(
-    page_title="Nifty Option Dashboard",
+    page_title="Nifty Options Signal Dashboard",
     page_icon="⚡",
     layout="wide"
 )
+
+# -------------------------------------------------------------------
+# HIGH-PRECISION BLACK-SCHOLES IV SOLVER
+# -------------------------------------------------------------------
+def cdf(x):
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+def bs_price(S, K, T, r, sigma, option_type):
+    if T <= 0 or sigma <= 0:
+        return max(0.0, S - K) if option_type == 'CE' else max(0.0, K - S)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    if option_type == 'CE':
+        return S * cdf(d1) - K * math.exp(-r * T) * cdf(d2)
+    else:
+        return K * math.exp(-r * T) * cdf(-d2) - S * cdf(-d1)
+
+def compute_implied_volatility(price, S, K, T, option_type, r=0.07):
+    """Calculates IV using 25-step bisection search if FYERS API returns 0"""
+    if price <= 0 or S <= 0 or K <= 0:
+        return 0.0
+    
+    T = max(T, 1.0 / 365.0) # Ensure minimum 1 day time value
+    intrinsic = max(0.0, S - K) if option_type == 'CE' else max(0.0, K - S)
+    
+    if price <= intrinsic:
+        return 0.0
+
+    low, high = 0.01, 3.0 # Search range: 1% to 300% IV
+    for _ in range(25):
+        mid = (low + high) / 2.0
+        p = bs_price(S, K, T, r, mid, option_type)
+        if p < price:
+            low = mid
+        else:
+            high = mid
+            
+    return round(((low + high) / 2.0) * 100.0, 2)
 
 # -------------------------------------------------------------------
 # SIDEBAR CONTROLS
 # -------------------------------------------------------------------
 st.sidebar.markdown("## 🔑 FYERS API Login")
 
-app_id = st.sidebar.text_input("FYERS App ID", value="IONVEW8SCZ-100", help="Must include -100 suffix")
-access_token = st.sidebar.text_input("FYERS Access Token", type="password", help="Paste your long access token")
+app_id = st.sidebar.text_input("FYERS App ID", value="IONVEW8SCZ-100")
+access_token = st.sidebar.text_input("FYERS Access Token", type="password")
 
 st.sidebar.markdown("---")
 selected_index = st.sidebar.selectbox("Index", ["NIFTY", "BANKNIFTY", "FINNIFTY"], index=0)
 auto_refresh = st.sidebar.slider("Auto-refresh (seconds)", min_value=15, max_value=300, value=60)
 oi_lookback = st.sidebar.slider("OI-change comparison window (minutes)", min_value=5, max_value=60, value=15)
 
-# Index Symbol and Strike Step Config
+# Symbol & Strike Step Mapping
 SYMBOL_CONFIG = {
     "NIFTY": {"fyers_symbol": "NSE:NIFTY50-INDEX", "step": 50},
     "BANKNIFTY": {"fyers_symbol": "NSE:NIFTYBANK-INDEX", "step": 100},
@@ -33,7 +72,7 @@ SYMBOL_CONFIG = {
 }
 
 # -------------------------------------------------------------------
-# DATA FETCHING
+# API DATA FETCHERS
 # -------------------------------------------------------------------
 @st.cache_data(ttl=10)
 def fetch_fyers_data(app_id, token, symbol):
@@ -51,14 +90,14 @@ def fetch_fyers_data(app_id, token, symbol):
     spot_price = 0.0
     
     try:
-        # Get Spot Price
+        # Fetch Spot Price via Quotes API
         q_res = requests.get(quotes_url, headers=headers, timeout=8)
         if q_res.status_code == 200:
             q_data = q_res.json()
             if q_data.get("s") == "ok" and "d" in q_data and len(q_data["d"]) > 0:
                 spot_price = float(q_data["d"][0].get("v", {}).get("lp", 0.0))
 
-        # Get Option Chain
+        # Fetch Option Chain Data
         c_res = requests.get(chain_url, headers=headers, timeout=10)
         if c_res.status_code != 200:
             return None, spot_price, f"HTTP {c_res.status_code}: {c_res.text}"
@@ -141,7 +180,6 @@ if access_token:
             st.subheader("📊 Open Interest (OI) Distribution by Strike")
             pivot_oi = df.pivot(index='strike_price', columns='option_type', values='oi').fillna(0)
             
-            # Focus on strikes around ATM (± 10 strikes)
             atm_range_pivot = pivot_oi.loc[
                 (pivot_oi.index >= atm_strike - (10 * strike_step)) & 
                 (pivot_oi.index <= atm_strike + (10 * strike_step))
@@ -151,8 +189,19 @@ if access_token:
             st.markdown("---")
 
             # ---------------------------------------------------------------
-            # OPTION CHAIN TABLE WITH NATIVE FYERS IV
+            # OPTION CHAIN TABLE WITH HYBRID IV RESOLVER
             # ---------------------------------------------------------------
+            # Time to expiry calculation for fallback IV calculation
+            days_to_exp = 3.0
+            if "expiryData" in chain_payload and len(chain_payload["expiryData"]) > 0:
+                try:
+                    exp_str = chain_payload["expiryData"][0].get("date", "")
+                    exp_dt = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                    days_to_exp = max((exp_dt - date.today()).days, 0.5)
+                except Exception:
+                    pass
+            T = days_to_exp / 365.0
+
             # Filter strikes around ATM (± 8 strikes)
             filtered_strikes = [s for s in strikes if abs(s - atm_strike) <= (8 * strike_step)]
             filtered_strikes.sort()
@@ -166,15 +215,17 @@ if access_token:
                 c_oichg = int(c_row['oich'].values[0]) if not c_row.empty and 'oich' in c_row.columns else 0
                 c_ltp = float(c_row['ltp'].values[0]) if not c_row.empty and 'ltp' in c_row.columns else 0.0
                 
-                # Extract native FYERS IV directly
-                c_iv = float(c_row['iv'].values[0]) if not c_row.empty and 'iv' in c_row.columns and pd.notnull(c_row['iv'].values[0]) else 0.0
+                # Check FYERS native IV first, fallback to Black-Scholes if 0
+                c_iv_native = float(c_row['iv'].values[0]) if not c_row.empty and 'iv' in c_row.columns and pd.notnull(c_row['iv'].values[0]) else 0.0
+                c_iv = c_iv_native if c_iv_native > 0 else compute_implied_volatility(c_ltp, spot_price, s, T, 'CE')
 
                 p_ltp = float(p_row['ltp'].values[0]) if not p_row.empty and 'ltp' in p_row.columns else 0.0
                 p_oichg = int(p_row['oich'].values[0]) if not p_row.empty and 'oich' in p_row.columns else 0
                 p_oi = int(p_row['oi'].values[0]) if not p_row.empty and 'oi' in p_row.columns else 0
                 
-                # Extract native FYERS IV directly
-                p_iv = float(p_row['iv'].values[0]) if not p_row.empty and 'iv' in p_row.columns and pd.notnull(p_row['iv'].values[0]) else 0.0
+                # Check FYERS native IV first, fallback to Black-Scholes if 0
+                p_iv_native = float(p_row['iv'].values[0]) if not p_row.empty and 'iv' in p_row.columns and pd.notnull(p_row['iv'].values[0]) else 0.0
+                p_iv = p_iv_native if p_iv_native > 0 else compute_implied_volatility(p_ltp, spot_price, s, T, 'PE')
 
                 table_rows.append({
                     "Call OI": f"{c_oi:,}",
