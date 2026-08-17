@@ -260,7 +260,7 @@ if access_token:
             st.markdown("---")
 
             # ---------------------------------------------------------------
-            # SEPARATE PLOTLY CHARTS (TOTAL OI & CHANGE IN OI)
+            # STACKED PLOTLY CHARTS (TOTAL OI ABOVE, CHANGE IN OI BELOW)
             # ---------------------------------------------------------------
             strikes = sorted(df['strike_price'].unique())
             filtered_strikes = [s for s in strikes if abs(s - atm_strike) <= (10 * strike_step)]
@@ -269,57 +269,55 @@ if access_token:
             chart_ce = ce_df[ce_df['strike_price'].isin(filtered_strikes)].sort_values('strike_price')
             chart_pe = pe_df[pe_df['strike_price'].isin(filtered_strikes)].sort_values('strike_price')
 
-            col_c1, col_c2 = st.columns(2)
+            # 1. Total Open Interest Chart
+            st.subheader("📊 Total Open Interest (Call vs Put)")
+            fig_total = go.Figure()
+            fig_total.add_trace(go.Bar(
+                x=chart_ce['strike_price'],
+                y=chart_ce['oi'],
+                name='Call OI (Resistance)',
+                marker_color='#1E88E5' # Blue
+            ))
+            fig_total.add_trace(go.Bar(
+                x=chart_pe['strike_price'],
+                y=chart_pe['oi'],
+                name='Put OI (Support)',
+                marker_color='#E53935' # Red
+            ))
+            fig_total.update_layout(
+                barmode='group',
+                xaxis_title='Strike Price',
+                yaxis_title='Total OI',
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=20, r=20, t=30, b=20),
+                height=380
+            )
+            st.plotly_chart(fig_total, use_container_width=True)
 
-            with col_c1:
-                st.subheader("📊 Total Open Interest (Call vs Put)")
-                fig_total = go.Figure()
-                fig_total.add_trace(go.Bar(
-                    x=chart_ce['strike_price'],
-                    y=chart_ce['oi'],
-                    name='Call OI (Resistance)',
-                    marker_color='#1E88E5' # Blue
-                ))
-                fig_total.add_trace(go.Bar(
-                    x=chart_pe['strike_price'],
-                    y=chart_pe['oi'],
-                    name='Put OI (Support)',
-                    marker_color='#E53935' # Red
-                ))
-                fig_total.update_layout(
-                    barmode='group',
-                    xaxis_title='Strike Price',
-                    yaxis_title='Total OI',
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    margin=dict(l=20, r=20, t=30, b=20),
-                    height=360
-                )
-                st.plotly_chart(fig_total, use_container_width=True)
-
-            with col_c2:
-                st.subheader("⚡ Change in Open Interest (Call vs Put)")
-                fig_chg = go.Figure()
-                fig_chg.add_trace(go.Bar(
-                    x=chart_ce['strike_price'],
-                    y=chart_ce['oich'],
-                    name='Call OI Change',
-                    marker_color='#1565C0' # Darker Blue
-                ))
-                fig_chg.add_trace(go.Bar(
-                    x=chart_pe['strike_price'],
-                    y=chart_pe['oich'],
-                    name='Put OI Change',
-                    marker_color='#C62828' # Darker Red
-                ))
-                fig_chg.update_layout(
-                    barmode='group',
-                    xaxis_title='Strike Price',
-                    yaxis_title='Change in OI',
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    margin=dict(l=20, r=20, t=30, b=20),
-                    height=360
-                )
-                st.plotly_chart(fig_chg, use_container_width=True)
+            # 2. Change in Open Interest Chart
+            st.subheader("⚡ Change in Open Interest (Call vs Put)")
+            fig_chg = go.Figure()
+            fig_chg.add_trace(go.Bar(
+                x=chart_ce['strike_price'],
+                y=chart_ce['oich'],
+                name='Call OI Change',
+                marker_color='#1565C0' # Darker Blue
+            ))
+            fig_chg.add_trace(go.Bar(
+                x=chart_pe['strike_price'],
+                y=chart_pe['oich'],
+                name='Put OI Change',
+                marker_color='#C62828' # Darker Red
+            ))
+            fig_chg.update_layout(
+                barmode='group',
+                xaxis_title='Strike Price',
+                yaxis_title='Change in OI',
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=20, r=20, t=30, b=20),
+                height=380
+            )
+            st.plotly_chart(fig_chg, use_container_width=True)
 
             st.markdown("---")
 
@@ -371,7 +369,6 @@ if access_token:
                 styles = pd.DataFrame('', index=df.index, columns=df.columns)
 
                 def apply_colors(series, col_name, color_map):
-                    # Sort unique non-zero values descending
                     unique_vals = sorted([v for v in series.unique() if v > 0], reverse=True)
                     top3_vals = unique_vals[:3]
                     
