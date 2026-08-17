@@ -1,15 +1,14 @@
 """
-Nifty Signal Dashboard — live NSE option-chain dashboard.
+Nifty Signal Dashboard — live NSE option-chain dashboard powered by FYERS API.
 
 Features:
-- Index selector
-- Expiry selector
+- FYERS API integration for reliable, block-free data
+- Index selector & Expiry selector
 - PCR / Max Pain / IV skew / expected move / ATM straddle
 - Top CE/PE OI walls
 - Option chain around ATM (includes Day OI Change, Window OI Delta, 2-decimal IVs, and Top-3 Heatmap Color Coding)
 - Intraday ATM CE OI vs PE OI graph
 - Intraday NIFTY spot graph
-- Intraday history collected from the first refresh of the day until close
 """
 
 import time
@@ -92,7 +91,6 @@ def highlight_top3_chain(data):
         else:
             continue
 
-        # Get indices of the 3 highest numeric values
         top_indices = data[col].dropna().nlargest(3).index
         for rank, idx in enumerate(top_indices):
             styles.loc[idx, col] = shades[rank]
@@ -101,9 +99,23 @@ def highlight_top3_chain(data):
 
 
 # ---------------------------------------------------------------------
-# Sidebar
+# Sidebar & FYERS Credentials
 # ---------------------------------------------------------------------
 st.sidebar.title("Nifty Signal Dashboard")
+
+st.sidebar.markdown("### 🔑 FYERS API Login")
+fyers_client_id = st.sidebar.text_input(
+    "FYERS App ID", 
+    type="password", 
+    help="Example: XX12345-100"
+)
+fyers_access_token = st.sidebar.text_input(
+    "FYERS Access Token", 
+    type="password", 
+    help="Paste your daily generated FYERS token"
+)
+
+st.sidebar.markdown("---")
 
 symbol = st.sidebar.selectbox("Index", SYMBOLS, index=0)
 refresh_secs = st.sidebar.slider(
@@ -117,9 +129,14 @@ strike_window = st.sidebar.slider(
 )
 
 st.sidebar.caption(
-    "Data: NSE option chain. PCR/IV/max-pain are positioning reads, "
+    "Data: FYERS Option Chain. PCR/IV/max-pain are positioning reads, "
     "not trade calls."
 )
+
+# Prompt for missing credentials
+if not fyers_client_id or not fyers_access_token:
+    st.info("👈 Please enter your **FYERS App ID** and **Access Token** in the sidebar to load live market data.")
+    st.stop()
 
 
 # ---------------------------------------------------------------------
@@ -128,18 +145,18 @@ st.sidebar.caption(
 placeholder = st.empty()
 
 try:
-    raw = st.session_state.nse.get_option_chain(symbol)
-except RuntimeError as e:
-    st.error(
-        f"Fetch failed: {e}. "
-        "NSE may temporarily rate-limit automated requests; "
-        "the next refresh will retry."
+    raw = st.session_state.nse.get_option_chain(
+        symbol,
+        client_id=fyers_client_id,
+        access_token=fyers_access_token,
     )
+except RuntimeError as e:
+    st.error(f"Fetch failed: {e}")
     st.stop()
 
 available_expiries = raw["records"].get("expiryDates", [])
 if not available_expiries:
-    st.error(f"No expiry dates returned by NSE for {symbol}.")
+    st.error(f"No expiry dates returned by FYERS for {symbol}.")
     st.stop()
 
 default_expiry_index = 0
@@ -163,6 +180,8 @@ else:
         selected_raw = st.session_state.nse.get_option_chain(
             symbol,
             expiry=selected_expiry,
+            client_id=fyers_client_id,
+            access_token=fyers_access_token,
         )
     except RuntimeError as e:
         st.error(f"Could not load {selected_expiry}: {e}")
@@ -454,11 +473,9 @@ with placeholder.container():
             "OI delta columns will appear after the initial lookback window passes. Top 3 highest OI & OI changes are highlighted."
         )
 
-    # Filter columns that exist in DataFrame
     cols_to_show = [c for c in cols_to_show if c in display_df.columns]
     chain_display = display_df[cols_to_show].copy()
 
-    # Precision and sign formatting dictionary
     chain_format = {}
     if "strike" in chain_display.columns:
         chain_format["strike"] = "{:,.0f}"
@@ -483,7 +500,6 @@ with placeholder.container():
     if "pe_oi" in chain_display.columns:
         chain_format["pe_oi"] = "{:,.0f}"
 
-    # Apply formatting AND Top-3 Color Heatmap styling
     styled_chain = (
         chain_display.style
         .format(chain_format, na_rep="—")
