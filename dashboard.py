@@ -4,7 +4,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import math
-from datetime import datetime, date
+from datetime import datetime, date, time
+from zoneinfo import ZoneInfo
 
 # -------------------------------------------------------------------
 # PAGE CONFIGURATION
@@ -142,7 +143,13 @@ SYMBOL_CONFIG = {
 # API FETCH FUNCTION
 # -------------------------------------------------------------------
 @st.cache_data(ttl=5)
-def fetch_fyers_data(app_id_val, token_val, symbol):
+def fetch_fyers_data(app_id_val, token_val, symbol, expiry_timestamp=None, expected_expiry=None):
+    """
+    Fetch FYERS option-chain data.
+
+    If expiry_timestamp is supplied, FYERS is explicitly asked for that
+    expiry. The returned expiry is then verified against expected_expiry.
+    """
     if not token_val or not app_id_val:
         return None, 0.0, "App ID and Access Token are required."
 
@@ -150,10 +157,19 @@ def fetch_fyers_data(app_id_val, token_val, symbol):
         "Authorization": f"{app_id_val}:{token_val}",
         "Content-Type": "application/json"
     }
-    chain_url = f"https://api-t1.fyers.in/data/options-chain-v3?symbol={symbol}&strikecount=30&greeks=1"
+
     quotes_url = f"https://api-t1.fyers.in/data/quotes?symbols={symbol}"
-    
+    chain_params = {
+        "symbol": symbol,
+        "strikecount": 50,
+        "greeks": 1,
+    }
+
+    if expiry_timestamp:
+        chain_params["timestamp"] = str(expiry_timestamp)
+
     spot_price = 0.0
+
     try:
         q_res = requests.get(quotes_url, headers=headers, timeout=8)
         if q_res.status_code == 200:
@@ -161,7 +177,13 @@ def fetch_fyers_data(app_id_val, token_val, symbol):
             if q_data.get("s") == "ok" and "d" in q_data and len(q_data["d"]) > 0:
                 spot_price = float(q_data["d"][0].get("v", {}).get("lp", 0.0))
 
-        c_res = requests.get(chain_url, headers=headers, timeout=10)
+        c_res = requests.get(
+            "https://api-t1.fyers.in/data/options-chain-v3",
+            headers=headers,
+            params=chain_params,
+            timeout=12,
+        )
+
         if c_res.status_code != 200:
             return None, spot_price, f"HTTP {c_res.status_code}: {c_res.text}"
 
@@ -170,12 +192,70 @@ def fetch_fyers_data(app_id_val, token_val, symbol):
             return None, spot_price, f"FYERS Error: {c_data.get('message', 'Failed to fetch chain')}"
 
         payload = c_data.get("data", {})
+
         if spot_price == 0.0:
-            spot_price = float(payload.get("underVal", 0.0))
+            spot_price = float(
+                payload.get("underVal", 0.0)
+                or payload.get("strikePrice", 0.0)
+                or 0.0
+            )
+
+        # Safety check: never silently analyse a different expiry.
+        if expected_expiry:
+            returned_expiry = None
+
+            for exp in payload.get("expiryData", []):
+                if str(exp.get("expiry", "")) == str(expiry_timestamp):
+                    returned_expiry = exp.get("date")
+                    break
+
+            if returned_expiry is None:
+                returned_dates = [
+                    str(exp.get("date", "")).strip()
+                    for exp in payload.get("expiryData", [])
+                    if exp.get("date")
+                ]
+                if len(returned_dates) == 1:
+                    returned_expiry = returned_dates[0]
+
+            if str(returned_expiry).strip() != str(expected_expiry).strip():
+                return (
+                    None,
+                    spot_price,
+                    f"EXPIRY MISMATCH: requested {expected_expiry}, "
+                    f"FYERS returned {returned_expiry or 'unknown'}"
+                )
 
         return payload, spot_price, None
+
     except Exception as e:
         return None, 0.0, f"Connection Error: {str(e)}"
+
+
+def get_expiry_map(chain_payload):
+    """Return {display_date: FYERS expiry timestamp}."""
+    result = {}
+    for exp in (chain_payload or {}).get("expiryData", []):
+        expiry_date = str(exp.get("date", "")).strip()
+        expiry_ts = exp.get("expiry")
+        if expiry_date and expiry_ts is not None:
+            result[expiry_date] = str(expiry_ts)
+    return result
+
+
+def exact_dte_days(expiry_string):
+    """Time remaining to the expiry-session close (15:30 IST)."""
+    try:
+        expiry_date = datetime.strptime(expiry_string, "%d-%m-%Y").date()
+        expiry_close = datetime.combine(
+            expiry_date,
+            time(15, 30),
+            tzinfo=ZoneInfo("Asia/Kolkata"),
+        )
+        now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+        return max((expiry_close - now_ist).total_seconds() / 86400.0, 0.0)
+    except Exception:
+        return 0.5
 
 # -------------------------------------------------------------------
 # MAIN APPLICATION LOGIC
@@ -183,27 +263,59 @@ def fetch_fyers_data(app_id_val, token_val, symbol):
 if access_token:
     config = SYMBOL_CONFIG[selected_index]
     lot_size = config["lot_size"]
-    chain_payload, spot_price, error_msg = fetch_fyers_data(app_id, access_token, config["fyers_symbol"])
+
+    # First request: discover all available expiries.
+    discovery_payload, spot_price, error_msg = fetch_fyers_data(
+        app_id,
+        access_token,
+        config["fyers_symbol"],
+    )
 
     if error_msg:
         st.error(f"❌ {error_msg}")
-    elif chain_payload and "optionsChain" in chain_payload:
-        
-        expiry_list = []
-        if "expiryData" in chain_payload:
-            for exp in chain_payload["expiryData"]:
-                expiry_list.append(exp.get("date", ""))
-        
-        selected_expiry = st.sidebar.selectbox("Select Expiry Date", expiry_list, index=0) if expiry_list else "Current Expiry"
+    elif discovery_payload and "optionsChain" in discovery_payload:
 
-        days_to_exp = 3.0
-        if selected_expiry and selected_expiry != "Current Expiry":
-            try:
-                exp_dt = datetime.strptime(selected_expiry, "%d-%m-%Y").date()
-                days_to_exp = max((exp_dt - date.today()).days, 0.5)
-            except Exception:
-                pass
+        expiry_map = get_expiry_map(discovery_payload)
+        expiry_list = list(expiry_map.keys())
+
+        selected_expiry = (
+            st.sidebar.selectbox(
+                "Select Expiry Date",
+                expiry_list,
+                index=0,
+            )
+            if expiry_list
+            else "Current Expiry"
+        )
+
+        # Second request: explicitly fetch the selected expiry.
+        if selected_expiry != "Current Expiry" and selected_expiry in expiry_map:
+            selected_timestamp = expiry_map[selected_expiry]
+
+            chain_payload, spot_price, error_msg = fetch_fyers_data(
+                app_id,
+                access_token,
+                config["fyers_symbol"],
+                expiry_timestamp=selected_timestamp,
+                expected_expiry=selected_expiry,
+            )
+
+            if error_msg:
+                st.error(f"❌ {error_msg}")
+                st.stop()
+        else:
+            chain_payload = discovery_payload
+
+        # Use the exact time remaining to the expiry session close.
+        days_to_exp = exact_dte_days(selected_expiry) if selected_expiry != "Current Expiry" else 0.5
+        days_to_exp = max(days_to_exp, 0.5)
         T = days_to_exp / 365.0
+
+        st.sidebar.caption(
+            f"✅ FYERS expiry verified: {selected_expiry}"
+            if selected_expiry != "Current Expiry"
+            else "⚠️ Current expiry only"
+        )
 
         raw_options = chain_payload["optionsChain"]
         df = pd.DataFrame(raw_options)
@@ -249,7 +361,7 @@ if access_token:
             sd_lower = spot_price - expected_move_pts
 
             st.markdown(f"# ⚡ {selected_index} Options Analytics")
-            st.markdown(f"**Spot Price:** `{spot_price:.2f}` | **ATM Strike:** `{int(atm_strike)}` | **Expiry:** `{selected_expiry}` (`{days_to_exp}` Days) | **ATM IV:** `{avg_atm_iv:.2f}%`")
+            st.markdown(f"**Spot Price:** `{spot_price:.2f}` | **ATM Strike:** `{int(atm_strike)}` | **Expiry:** `{selected_expiry}` (`{days_to_exp:.2f} Days) | **ATM IV:** `{avg_atm_iv:.2f}%`")
 
             st.markdown("### 📊 Market Summary & Differences")
 
